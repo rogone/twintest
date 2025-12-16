@@ -10,8 +10,8 @@ import (
 
 var (
 	srcFile = flag.String("src", "", "source go file to analyze")
-	scope   = flag.String("scope", "all", "test scope: 'func-only', 'struct-only', or 'all'")
-	paths   = flag.String("paths", "all", "path filtering: 'all' or 'return-only'")
+	scope   = flag.String("scope", "all", "test scope: 'func', 'struct', or 'all'")
+	paths   = flag.String("paths", "all", "path filtering: 'all' or 'return'")
 )
 
 func main() {
@@ -22,15 +22,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	validScope := map[string]bool{"func-only": true, "struct-only": true, "all": true}
+	validScope := map[string]bool{"func": true, "struct": true, "all": true}
 	if !validScope[*scope] {
-		fmt.Fprintf(os.Stderr, "error: -scope must be one of 'func-only', 'struct-only', 'all'\n")
+		fmt.Fprintf(os.Stderr, "error: -scope must be one of 'func', 'struct', 'all'\n")
 		os.Exit(1)
 	}
 
-	validPaths := map[string]bool{"all": true, "return-only": true}
+	validPaths := map[string]bool{"all": true, "return": true}
 	if !validPaths[*paths] {
-		fmt.Fprintf(os.Stderr, "error: -paths must be 'all' or 'return-only'\n")
+		fmt.Fprintf(os.Stderr, "error: -paths must be 'all' or 'return'\n")
 		os.Exit(1)
 	}
 
@@ -58,14 +58,14 @@ func main() {
 
 func trimByScope(structInfo []*StructInfo) []*StructInfo {
 	switch *scope {
-	case "func-only":
+	case "func":
 		for i := range structInfo {
 			if structInfo[i].Name == "" {
 				structInfo = []*StructInfo{structInfo[i]}
 				break
 			}
 		}
-	case "struct-only":
+	case "struct":
 		newStructInfo := structInfo[:0]
 		for i := range structInfo {
 			if structInfo[i].Name != "" {
@@ -79,7 +79,7 @@ func trimByScope(structInfo []*StructInfo) []*StructInfo {
 }
 
 func trimByPaths(structInfo []*StructInfo) []*StructInfo {
-	if *paths != "return-only" {
+	if *paths != "return" {
 		return structInfo
 	}
 

@@ -12,7 +12,10 @@ import (
 )
 
 //go:embed template/suite.tmpl
-var sutieTemplate string
+var suiteTemplate string
+
+//go:embed template/func.tmpl
+var funcTemplate string
 
 func GenerateTestFiles(src string, ss []*StructInfo, packageName string) error {
 	absPath, err := filepath.Abs(src)
@@ -28,9 +31,9 @@ func GenerateTestFiles(src string, ss []*StructInfo, packageName string) error {
 
 		outFile := strings.TrimSuffix(base, ".go") // + "_test.go"
 		if si.Name == "" {
-			outFile = fmt.Sprintf("%s_suite_test.go", base)
+			outFile = fmt.Sprintf("%s_test.go", outFile)
 		} else {
-			outFile = fmt.Sprintf("%s_%s_suite_test.go", base, strings.ToLower(si.Name))
+			outFile = fmt.Sprintf("%s_%s_suite_test.go", outFile, strings.ToLower(si.Name))
 		}
 
 		outFile = filepath.Join(dir, outFile)
@@ -54,19 +57,14 @@ func GenerateTestFile(filename string, si *StructInfo, packageName string) error
 		StructInfo:  si,
 	}
 
+	tmplFile := suiteTemplate
+	if si.Name == "" {
+		tmplFile = funcTemplate
+	}
+
 	tmpl := template.Must(template.New("test").Funcs(template.FuncMap{
-		"repeat": func(s string, n int) string { return strings.Repeat(s, n) },
-		"add":    func(a, b int) int { return a + b },
-		"quote":  func(s string) string { return fmt.Sprintf("%q", s) },
-		"dict": func(values ...interface{}) map[string]interface{} {
-			dict := make(map[string]interface{})
-			for i := 0; i < len(values); i += 2 {
-				key := values[i].(string)
-				dict[key] = values[i+1]
-			}
-			return dict
-		},
-	}).Parse(sutieTemplate))
+		"quote": func(s string) string { return fmt.Sprintf("%q", s) },
+	}).Parse(tmplFile))
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
