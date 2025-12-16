@@ -14,8 +14,8 @@ func Test_{{ .Name }}(t *testing.T) {
 {{end}}
 
 {{define "branch"}}
-{{- $name := printf "[%s]:%d" (quote .CodeLine) .Line }}
-t.Run("{{ $name }}", func(t *testing.T) {
+{{- $name := quote .CodeLine }}
+t.Run({{ $name }}, func(t *testing.T) { // @{{ .Line }}
 {{- if len .Children -}}
 {{- range .Children -}}
 {{- template "branch" . -}}

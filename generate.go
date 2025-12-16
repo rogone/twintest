@@ -7,6 +7,7 @@ import (
 	"go/format"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -31,7 +32,7 @@ func GenerateTestFiles(src string, ss []*StructInfo, packageName string) error {
 
 		outFile := strings.TrimSuffix(base, ".go") // + "_test.go"
 		if si.Name == "" {
-			outFile = fmt.Sprintf("%s_test.go", outFile)
+			outFile = fmt.Sprintf("%s_branch_test.go", outFile)
 		} else {
 			outFile = fmt.Sprintf("%s_%s_suite_test.go", outFile, strings.ToLower(si.Name))
 		}
@@ -63,7 +64,7 @@ func GenerateTestFile(filename string, si *StructInfo, packageName string) error
 	}
 
 	tmpl := template.Must(template.New("test").Funcs(template.FuncMap{
-		"quote": func(s string) string { return fmt.Sprintf("%q", s) },
+		"quote": strconv.Quote,
 	}).Parse(tmplFile))
 
 	var buf bytes.Buffer

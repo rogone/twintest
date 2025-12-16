@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -77,7 +78,9 @@ func ParseFile(filename string) ([]*StructInfo, string, error) {
 	}
 
 	if _, ok := structTypes[""]; !ok {
-		structTypes[""] = &StructInfo{}
+		dummy := &StructInfo{}
+		structTypes[""] = dummy
+		structs = append(structs, dummy)
 	}
 
 	for _, decl := range node.Decls {
@@ -126,14 +129,13 @@ func ExtractBranches(block *ast.BlockStmt, fset *token.FileSet, src []byte) []*B
 }
 
 func visitStmt(stmt ast.Stmt, fset *token.FileSet, src []byte, out *[]*Branch) {
-	// Note: *ast.FuncLit is not a Stmt, so no need to check for it here
-
 	var b *Branch
 	switch s := stmt.(type) {
 	case *ast.ReturnStmt:
 		b = parseReturnStmt(s, fset, src)
 	case *ast.IfStmt:
-		b = parseIfStmt(s, fset, src)
+		children := parseIfStmt(s, fset, src)
+		*out = append(*out, children...)
 	case *ast.ForStmt:
 		b = parseForStmt(s, fset, src)
 	case *ast.RangeStmt:
@@ -167,23 +169,20 @@ func parseReturnStmt(s *ast.ReturnStmt, fset *token.FileSet, src []byte) *Branch
 	}
 }
 
-func parseIfStmt(s *ast.IfStmt, fset *token.FileSet, src []byte) *Branch {
+func parseIfStmt(s *ast.IfStmt, fset *token.FileSet, src []byte) []*Branch {
 	lineNo := fset.Position(s.Pos()).Line
 	code := nodeToCode(s, fset, src)
 	bodyStart := strings.Index(code, "{")
 	if bodyStart > 0 {
 		code = strings.TrimSpace(code[:bodyStart])
 	}
-	b := &Branch{
-		Line:     lineNo,
-		CodeLine: code,
-		Children: []*Branch{ // if
-			{
-				Line:      lineNo,
-				CodeLine:  code,
-				Children:  ExtractBranches(s.Body, fset, src),
-				hasReturn: false,
-			},
+
+	children := []*Branch{ // if
+		{
+			Line:      lineNo,
+			CodeLine:  code,
+			Children:  ExtractBranches(s.Body, fset, src),
+			hasReturn: false,
 		},
 	}
 
@@ -191,9 +190,9 @@ func parseIfStmt(s *ast.IfStmt, fset *token.FileSet, src []byte) *Branch {
 		if elseIf, ok := s.Else.(*ast.IfStmt); ok {
 			curr := elseIf
 			for curr != nil {
-				b.Children = append(b.Children, &Branch{
+				children = append(children, &Branch{
 					Line:      fset.Position(curr.Pos()).Line,
-					CodeLine:  nodeToCode(curr.Cond, fset, src),
+					CodeLine:  nodeToCode(curr, fset, src),
 					Children:  ExtractBranches(curr.Body, fset, src),
 					hasReturn: false,
 				})
@@ -203,9 +202,9 @@ func parseIfStmt(s *ast.IfStmt, fset *token.FileSet, src []byte) *Branch {
 						curr = next
 						continue
 					} else {
-						b.Children = append(b.Children, &Branch{
+						children = append(children, &Branch{
 							Line:      fset.Position(curr.Else.Pos()).Line,
-							CodeLine:  "else",
+							CodeLine:  fmt.Sprintf("else // of [%s]:@%d", code, lineNo),
 							Children:  ExtractBranches(curr.Else.(*ast.BlockStmt), fset, src),
 							hasReturn: false,
 						})
@@ -215,29 +214,21 @@ func parseIfStmt(s *ast.IfStmt, fset *token.FileSet, src []byte) *Branch {
 				break
 			}
 		} else {
-			b.Children = append(b.Children, &Branch{
+			children = append(children, &Branch{
 				Line:      fset.Position(s.Else.Pos()).Line,
-				CodeLine:  "else",
+				CodeLine:  fmt.Sprintf("else // of [%s]:@%d", code, lineNo),
 				Children:  ExtractBranches(s.Else.(*ast.BlockStmt), fset, src),
 				hasReturn: false,
 			})
 		}
 	}
 
-	if len(b.Children) == 1 {
-		return b.Children[0]
-	}
-
-	return b
+	return children
 }
 
 func parseForStmt(s *ast.ForStmt, fset *token.FileSet, src []byte) *Branch {
 	lineNo := fset.Position(s.Pos()).Line
 	code := nodeToCode(s, fset, src)
-	bodyStart := strings.Index(code, "{")
-	if bodyStart > 0 {
-		code = strings.TrimSpace(code[:bodyStart])
-	}
 
 	return &Branch{
 		Line:      lineNo,
@@ -250,10 +241,6 @@ func parseForStmt(s *ast.ForStmt, fset *token.FileSet, src []byte) *Branch {
 func parseRangeStmt(s *ast.RangeStmt, fset *token.FileSet, src []byte) *Branch {
 	lineNo := fset.Position(s.Pos()).Line
 	code := nodeToCode(s, fset, src)
-	bodyStart := strings.Index(code, "{")
-	if bodyStart > 0 {
-		code = strings.TrimSpace(code[:bodyStart])
-	}
 
 	return &Branch{
 		Line:      lineNo,
@@ -266,10 +253,6 @@ func parseRangeStmt(s *ast.RangeStmt, fset *token.FileSet, src []byte) *Branch {
 func parseSwitchStmt(s *ast.SwitchStmt, fset *token.FileSet, src []byte) *Branch {
 	lineNo := fset.Position(s.Pos()).Line
 	code := nodeToCode(s, fset, src)
-	bodyStart := strings.Index(code, "{")
-	if bodyStart > 0 {
-		code = strings.TrimSpace(code[:bodyStart])
-	}
 
 	b := &Branch{
 		Line:      lineNo,
@@ -281,9 +264,9 @@ func parseSwitchStmt(s *ast.SwitchStmt, fset *token.FileSet, src []byte) *Branch
 	for _, cc := range s.Body.List {
 		if cs, ok := cc.(*ast.CaseClause); ok {
 			caseLine := fset.Position(cs.Pos()).Line
-			caseCode := ""
-			if caseLine > 0 && caseLine <= len(src) {
-				caseCode = strings.TrimSpace(string(src[caseLine-1]))
+			caseCode := nodeToCode(cs, fset, src)
+			if len(cs.List) == 0 { //default
+				caseCode = fmt.Sprintf("%s // [%s]:@%d", caseCode, code, lineNo)
 			}
 			caseChildren := extractFromStmtList(cs.Body, fset, src)
 			b.Children = append(b.Children, &Branch{
@@ -301,10 +284,6 @@ func parseSwitchStmt(s *ast.SwitchStmt, fset *token.FileSet, src []byte) *Branch
 func parseTypeSwitchStmt(s *ast.TypeSwitchStmt, fset *token.FileSet, src []byte) *Branch {
 	lineNo := fset.Position(s.Pos()).Line
 	code := nodeToCode(s, fset, src)
-	bodyStart := strings.Index(code, "{")
-	if bodyStart > 0 {
-		code = strings.TrimSpace(code[:bodyStart])
-	}
 
 	b := &Branch{
 		Line:      lineNo,
@@ -316,9 +295,9 @@ func parseTypeSwitchStmt(s *ast.TypeSwitchStmt, fset *token.FileSet, src []byte)
 	for _, cc := range s.Body.List {
 		if cs, ok := cc.(*ast.CaseClause); ok {
 			caseLine := fset.Position(cs.Pos()).Line
-			caseCode := ""
-			if caseLine > 0 && caseLine <= len(src) {
-				caseCode = strings.TrimSpace(string(src[caseLine-1]))
+			caseCode := nodeToCode(cs, fset, src)
+			if len(cs.List) == 0 { //default
+				caseCode = fmt.Sprintf("%s // of [%s]:@%d", caseCode, code, lineNo)
 			}
 			caseChildren := extractFromStmtList(cs.Body, fset, src)
 			b.Children = append(b.Children, &Branch{
@@ -336,10 +315,6 @@ func parseTypeSwitchStmt(s *ast.TypeSwitchStmt, fset *token.FileSet, src []byte)
 func parseSelectStmt(s *ast.SelectStmt, fset *token.FileSet, src []byte) *Branch {
 	lineNo := fset.Position(s.Pos()).Line
 	code := nodeToCode(s, fset, src)
-	bodyStart := strings.Index(code, "{")
-	if bodyStart > 0 {
-		code = strings.TrimSpace(code[:bodyStart])
-	}
 
 	b := &Branch{
 		Line:      lineNo,
@@ -351,9 +326,9 @@ func parseSelectStmt(s *ast.SelectStmt, fset *token.FileSet, src []byte) *Branch
 	for _, cc := range s.Body.List {
 		if cs, ok := cc.(*ast.CommClause); ok {
 			commLine := fset.Position(cs.Pos()).Line
-			commCode := ""
-			if commLine > 0 && commLine <= len(src) {
-				commCode = strings.TrimSpace(string(src[commLine-1]))
+			commCode := nodeToCode(cs, fset, src)
+			if cs.Comm == nil { //default
+				commCode = fmt.Sprintf("%s // of [%s]:@%d", commCode, code, lineNo)
 			}
 			commChildren := extractFromStmtList(cs.Body, fset, src)
 			b.Children = append(b.Children, &Branch{
@@ -371,12 +346,16 @@ func parseSelectStmt(s *ast.SelectStmt, fset *token.FileSet, src []byte) *Branch
 func parseBlockStmt(s *ast.BlockStmt, fset *token.FileSet, src []byte) *Branch {
 	lineNo := fset.Position(s.Pos()).Line
 	code := "<block>"
-	return &Branch{
+	b := &Branch{
 		Line:      lineNo,
 		CodeLine:  code,
 		Children:  ExtractBranches(s, fset, src),
 		hasReturn: false,
 	}
+	if len(b.Children) == 1 {
+		return b.Children[0]
+	}
+	return b
 }
 
 func extractFromStmtList(stmts []ast.Stmt, fset *token.FileSet, src []byte) []*Branch {
@@ -387,35 +366,54 @@ func extractFromStmtList(stmts []ast.Stmt, fset *token.FileSet, src []byte) []*B
 	return children
 }
 
-func FilterReturnPaths(branches []*Branch) []*Branch {
-	var result []*Branch
-	for _, b := range branches {
-		if pruneBranch(b) {
-			result = append(result, b)
-		}
-	}
-	return result
-}
-
-func pruneBranch(b *Branch) bool {
-	if b.HasReturn() {
-		var kept []*Branch
-		for _, child := range b.Children {
-			if pruneBranch(child) {
-				kept = append(kept, child)
-			}
-		}
-		b.Children = kept
-		return true
-	}
-	return false
-}
-
-func nodeToCode(n ast.Node, fset *token.FileSet, src []byte) string {
-	start := fset.Position(n.Pos()).Offset
-	end := fset.Position(n.End()).Offset
-	if start >= 0 && end <= len(src) && start < end {
+func nodeToCode(stmt ast.Stmt, fset *token.FileSet, src []byte) string {
+	switch s := stmt.(type) {
+	case *ast.ReturnStmt:
+		start := fset.Position(stmt.Pos()).Offset
+		end := fset.Position(stmt.End()).Offset
 		return strings.TrimSpace(string(src[start:end]))
+	case *ast.IfStmt:
+		start := fset.Position(stmt.Pos()).Offset
+		end := fset.Position(s.Cond.End()).Offset
+		return strings.TrimSpace(string(src[start:end]))
+	case *ast.ForStmt:
+		start := fset.Position(stmt.Pos()).Offset
+		end := start + 3
+		if s.Post != nil {
+			end = fset.Position(s.Post.End()).Offset
+		} else if s.Cond != nil {
+			end = fset.Position(s.Cond.End()).Offset
+		} else if s.Init != nil {
+			end = fset.Position(s.Init.End()).Offset
+		}
+		return strings.TrimSpace(string(src[start:end]))
+	case *ast.RangeStmt:
+		start := fset.Position(s.Pos()).Offset
+		end := fset.Position(s.X.End()).Offset
+		return strings.TrimSpace(string(src[start:end]))
+	case *ast.SwitchStmt:
+		start := fset.Position(s.Pos()).Offset
+		end := fset.Position(s.Tag.End()).Offset
+		return strings.TrimSpace(string(src[start:end]))
+	case *ast.TypeSwitchStmt:
+		start := fset.Position(s.Pos()).Offset
+		end := fset.Position(s.Assign.End()).Offset
+		return strings.TrimSpace(string(src[start:end]))
+	case *ast.CaseClause:
+		start := fset.Position(s.Pos()).Offset
+		end := fset.Position(s.Colon).Offset
+		return strings.TrimSpace(string(src[start:end]))
+	case *ast.SelectStmt:
+		start := fset.Position(s.Pos()).Offset
+		end := start + 6
+		return strings.TrimSpace(string(src[start:end]))
+	case *ast.CommClause:
+		start := fset.Position(s.Pos()).Offset
+		end := fset.Position(s.Colon).Offset
+		return strings.TrimSpace(string(src[start:end]))
+	case *ast.BlockStmt:
+		return "<block>"
+	default:
+		return "<invalid>"
 	}
-	return "<invalid>"
 }
