@@ -6,37 +6,86 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-{{if .HasSuite}}
-type {{ .Receiver }}TestSuite struct {
+func Test{{ .StructInfo.Name }}TestSuite(t *testing.T) {
+	suite.Run(t, new({{ .StructInfo.Name }}TestSuite))
+}
+
+type {{ .StructInfo.Name }}TestSuite struct {
 	suite.Suite
 }
-{{end}}
 
-{{range .TestCases}}
-{{if .IsMethod}}
-func (suite *{{ .Receiver }}TestSuite) Test_{{ .Name }}(t *testing.T) {
-{{else}}
-func Test_{{ .Name }}(t *testing.T) {
-{{end}}
-{{- range .Branches }}
-{{ template "branch" (dict "Branch" . "Indent" 1) }}
-{{- end }}
+func (suite *{{ .StructInfo.Name }}TestSuite) SetupAllSuite() {
+	// 在所有测试套件开始前运行
 }
-{{end}}
 
-{{if .HasSuite}}
-func Test{{ .Receiver }}TestSuite(t *testing.T) {
-	suite.Run(t, new({{ .Receiver }}TestSuite))
+// TearDownAllSuite 在所有测试套件结束后运行
+func (suite *{{ .StructInfo.Name }}TestSuite) TearDownAllSuite() {
+	// 在所有测试套件结束后运行
+}
+
+// SetupTestSuite 在当前测试套件开始前运行
+func (suite *{{ .StructInfo.Name }}TestSuite) SetupTestSuite() {
+	// 在当前测试套件开始前运行
+}
+
+// TearDownTestSuite 在当前测试套件结束后运行
+func (suite *{{ .StructInfo.Name }}TestSuite) TearDownTestSuite() {
+	// 在当前测试套件结束后运行
+}
+
+// SetupSubTest 在每个子测试开始前运行
+func (suite *{{ .StructInfo.Name }}TestSuite) SetupSubTest() {
+	// 在每个子测试开始前运行
+}
+
+// TearDownSubTest 在每个子测试结束后运行
+func (suite *{{ .StructInfo.Name }}TestSuite) TearDownSubTest() {
+	// 在每个子测试结束后运行
+}
+
+// BeforeTest 在每个测试方法开始前运行
+func (suite *{{ .StructInfo.Name }}TestSuite) BeforeTest(suiteName, testName string) {
+	// 在每个测试方法开始前运行
+}
+
+// AfterTest 在每个测试方法结束后运行
+func (suite *{{ .StructInfo.Name }}TestSuite) AfterTest(suiteName, testName string) {
+	// 在每个测试方法结束后运行
+}
+
+func (suite *{{ .StructInfo.Name }}TestSuite) SetupSuite() {
+	// 在所有测试开始前运行
+}
+
+func (suite *{{ .StructInfo.Name }}TestSuite) SetupTest() {
+	// 在每个测试开始前运行
+}
+
+func (suite *{{ .StructInfo.Name }}TestSuite) TearDownTest() {
+	// 在每个测试结束后运行
+}
+
+func (suite *{{ .StructInfo.Name }}TestSuite) TearDownSuite() {
+	// 在所有测试结束后运行
+}
+
+{{range .StructInfo.Methods}}
+func (suite *{{ .Receiver }}TestSuite) Test_{{ .Name }}(t *testing.T) {
+{{- range .Branches -}}
+{{- template "branch" . -}}
+{{- end -}}
 }
 {{end}}
 
 {{define "branch"}}
-{{ $indent := .Indent }}
-{{ $tabs := repeat "\t" $indent }}
-{{ $name := printf "line:%d: %s" .Branch.Line (quote .Branch.CodeLine) }}
-{{ $tabs }}t.Run({{ $name }}, func(t *testing.T) {
-{{- range .Branch.Children }}
-{{ template "branch" (dict "Branch" . "Indent" (add $indent 1)) }}
-{{- end }}
-{{ $tabs }})
+{{- $name := printf "[%s]:%d" (quote .CodeLine) .Line }}
+t.Run(`{{ $name }}`, func(t *testing.T) {
+{{- if len .Children -}}
+{{- range .Children -}}
+{{- template "branch" . -}}
+{{- end -}}
+{{- else }}
+t.Skip("TODO")
+{{end -}}
+})
 {{end}}
