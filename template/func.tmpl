@@ -7,7 +7,9 @@ import (
 
 {{range .StructInfo.Methods}}
 func Test_{{ .Name }}(t *testing.T) {
-{{- range .Branches }}
+t.Logf("测试 {{.Name}} 函数")
+
+{{ range .Branches }}
 {{ template "branch" . }}
 {{- end }}
 }
@@ -21,7 +23,7 @@ t.Run({{ $name }}, func(t *testing.T) { // @{{ .Line }}
 {{- template "branch" . -}}
 {{- end -}}
 {{- else }}
-t.Skip("TODO")
+t.Skip("未实现")
 {{ end -}}
 })
 {{end}}
