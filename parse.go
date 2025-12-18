@@ -9,8 +9,27 @@ import (
 	"strings"
 )
 
+const (
+	BranchIfHost = iota + 1
+	BranchIf
+	BranchElseIf
+	BranchElse
+	BranchFor
+	BranchRange
+	BranchSwitch
+	BranchTypeSwitch
+	BranchCase
+	BranchDefault
+	BranchSelect
+	BranchCommClause
+	BranchCommClauseDefault
+	BranchBlock
+	BranchReturn
+)
+
 // Branch represents a control-flow branch (if, for, switch case, return, etc.)
 type Branch struct {
+	Type      int
 	Line      int
 	CodeLine  string
 	Children  []*Branch
@@ -134,8 +153,7 @@ func visitStmt(stmt ast.Stmt, fset *token.FileSet, src []byte, out *[]*Branch) {
 	case *ast.ReturnStmt:
 		b = parseReturnStmt(s, fset, src)
 	case *ast.IfStmt:
-		children := parseIfStmt(s, fset, src)
-		*out = append(*out, children...)
+		b = parseIfStmt(s, fset, src)
 	case *ast.ForStmt:
 		b = parseForStmt(s, fset, src)
 	case *ast.RangeStmt:
@@ -162,6 +180,7 @@ func parseReturnStmt(s *ast.ReturnStmt, fset *token.FileSet, src []byte) *Branch
 	lineNo := fset.Position(s.Pos()).Line
 	code := nodeToCode(s, fset, src)
 	return &Branch{
+		Type:      BranchReturn,
 		Line:      lineNo,
 		CodeLine:  code,
 		Children:  nil,
@@ -169,7 +188,7 @@ func parseReturnStmt(s *ast.ReturnStmt, fset *token.FileSet, src []byte) *Branch
 	}
 }
 
-func parseIfStmt(s *ast.IfStmt, fset *token.FileSet, src []byte) []*Branch {
+func parseIfStmt(s *ast.IfStmt, fset *token.FileSet, src []byte) *Branch {
 	lineNo := fset.Position(s.Pos()).Line
 	code := nodeToCode(s, fset, src)
 	bodyStart := strings.Index(code, "{")
@@ -177,22 +196,30 @@ func parseIfStmt(s *ast.IfStmt, fset *token.FileSet, src []byte) []*Branch {
 		code = strings.TrimSpace(code[:bodyStart])
 	}
 
-	children := []*Branch{ // if
-		{
-			Line:      lineNo,
-			CodeLine:  code,
-			Children:  ExtractBranches(s.Body, fset, src),
-			hasReturn: false,
+	b := &Branch{
+		Type:     BranchIfHost,
+		Line:     lineNo,
+		CodeLine: code,
+		Children: []*Branch{ // if
+			{
+				Type:      BranchIf,
+				Line:      lineNo,
+				CodeLine:  code,
+				Children:  ExtractBranches(s.Body, fset, src),
+				hasReturn: false,
+			},
 		},
+		hasReturn: false,
 	}
 
 	if s.Else != nil {
 		if elseIf, ok := s.Else.(*ast.IfStmt); ok {
 			curr := elseIf
 			for curr != nil {
-				children = append(children, &Branch{
+				b.Children = append(b.Children, &Branch{
+					Type:      BranchElseIf,
 					Line:      fset.Position(curr.Pos()).Line,
-					CodeLine:  nodeToCode(curr, fset, src),
+					CodeLine:  "else " + nodeToCode(curr, fset, src),
 					Children:  ExtractBranches(curr.Body, fset, src),
 					hasReturn: false,
 				})
@@ -202,7 +229,8 @@ func parseIfStmt(s *ast.IfStmt, fset *token.FileSet, src []byte) []*Branch {
 						curr = next
 						continue
 					} else {
-						children = append(children, &Branch{
+						b.Children = append(b.Children, &Branch{
+							Type:      BranchElse,
 							Line:      fset.Position(curr.Else.Pos()).Line,
 							CodeLine:  fmt.Sprintf("else // of [%s]:@%d", code, lineNo),
 							Children:  ExtractBranches(curr.Else.(*ast.BlockStmt), fset, src),
@@ -214,7 +242,8 @@ func parseIfStmt(s *ast.IfStmt, fset *token.FileSet, src []byte) []*Branch {
 				break
 			}
 		} else {
-			children = append(children, &Branch{
+			b.Children = append(b.Children, &Branch{
+				Type:      BranchElse,
 				Line:      fset.Position(s.Else.Pos()).Line,
 				CodeLine:  fmt.Sprintf("else // of [%s]:@%d", code, lineNo),
 				Children:  ExtractBranches(s.Else.(*ast.BlockStmt), fset, src),
@@ -223,7 +252,11 @@ func parseIfStmt(s *ast.IfStmt, fset *token.FileSet, src []byte) []*Branch {
 		}
 	}
 
-	return children
+	if len(b.Children) == 1 {
+		return b.Children[0]
+	}
+
+	return b
 }
 
 func parseForStmt(s *ast.ForStmt, fset *token.FileSet, src []byte) *Branch {
@@ -231,6 +264,7 @@ func parseForStmt(s *ast.ForStmt, fset *token.FileSet, src []byte) *Branch {
 	code := nodeToCode(s, fset, src)
 
 	return &Branch{
+		Type:      BranchFor,
 		Line:      lineNo,
 		CodeLine:  code,
 		Children:  ExtractBranches(s.Body, fset, src),
@@ -243,6 +277,7 @@ func parseRangeStmt(s *ast.RangeStmt, fset *token.FileSet, src []byte) *Branch {
 	code := nodeToCode(s, fset, src)
 
 	return &Branch{
+		Type:      BranchRange,
 		Line:      lineNo,
 		CodeLine:  code,
 		Children:  ExtractBranches(s.Body, fset, src),
@@ -255,6 +290,7 @@ func parseSwitchStmt(s *ast.SwitchStmt, fset *token.FileSet, src []byte) *Branch
 	code := nodeToCode(s, fset, src)
 
 	b := &Branch{
+		Type:      BranchSwitch,
 		Line:      lineNo,
 		CodeLine:  code,
 		Children:  nil,
@@ -265,11 +301,14 @@ func parseSwitchStmt(s *ast.SwitchStmt, fset *token.FileSet, src []byte) *Branch
 		if cs, ok := cc.(*ast.CaseClause); ok {
 			caseLine := fset.Position(cs.Pos()).Line
 			caseCode := nodeToCode(cs, fset, src)
+			typ := BranchCase
 			if len(cs.List) == 0 { //default
 				caseCode = fmt.Sprintf("%s // [%s]:@%d", caseCode, code, lineNo)
+				typ = BranchDefault
 			}
 			caseChildren := extractFromStmtList(cs.Body, fset, src)
 			b.Children = append(b.Children, &Branch{
+				Type:      typ,
 				Line:      caseLine,
 				CodeLine:  caseCode,
 				Children:  caseChildren,
@@ -286,6 +325,7 @@ func parseTypeSwitchStmt(s *ast.TypeSwitchStmt, fset *token.FileSet, src []byte)
 	code := nodeToCode(s, fset, src)
 
 	b := &Branch{
+		Type:      BranchTypeSwitch,
 		Line:      lineNo,
 		CodeLine:  code,
 		Children:  nil,
@@ -296,11 +336,14 @@ func parseTypeSwitchStmt(s *ast.TypeSwitchStmt, fset *token.FileSet, src []byte)
 		if cs, ok := cc.(*ast.CaseClause); ok {
 			caseLine := fset.Position(cs.Pos()).Line
 			caseCode := nodeToCode(cs, fset, src)
+			typ := BranchCase
 			if len(cs.List) == 0 { //default
 				caseCode = fmt.Sprintf("%s // of [%s]:@%d", caseCode, code, lineNo)
+				typ = BranchDefault
 			}
 			caseChildren := extractFromStmtList(cs.Body, fset, src)
 			b.Children = append(b.Children, &Branch{
+				Type:      typ,
 				Line:      caseLine,
 				CodeLine:  caseCode,
 				Children:  caseChildren,
@@ -317,6 +360,7 @@ func parseSelectStmt(s *ast.SelectStmt, fset *token.FileSet, src []byte) *Branch
 	code := nodeToCode(s, fset, src)
 
 	b := &Branch{
+		Type:      BranchSelect,
 		Line:      lineNo,
 		CodeLine:  code,
 		Children:  nil,
@@ -327,11 +371,14 @@ func parseSelectStmt(s *ast.SelectStmt, fset *token.FileSet, src []byte) *Branch
 		if cs, ok := cc.(*ast.CommClause); ok {
 			commLine := fset.Position(cs.Pos()).Line
 			commCode := nodeToCode(cs, fset, src)
+			typ := BranchCommClause
 			if cs.Comm == nil { //default
 				commCode = fmt.Sprintf("%s // of [%s]:@%d", commCode, code, lineNo)
+				typ = BranchCommClauseDefault
 			}
 			commChildren := extractFromStmtList(cs.Body, fset, src)
 			b.Children = append(b.Children, &Branch{
+				Type:      typ,
 				Line:      commLine,
 				CodeLine:  commCode,
 				Children:  commChildren,
@@ -347,6 +394,7 @@ func parseBlockStmt(s *ast.BlockStmt, fset *token.FileSet, src []byte) *Branch {
 	lineNo := fset.Position(s.Pos()).Line
 	code := "<block>"
 	b := &Branch{
+		Type:      BranchBlock,
 		Line:      lineNo,
 		CodeLine:  code,
 		Children:  ExtractBranches(s, fset, src),
@@ -378,14 +426,14 @@ func nodeToCode(stmt ast.Stmt, fset *token.FileSet, src []byte) string {
 		return strings.TrimSpace(string(src[start:end]))
 	case *ast.ForStmt:
 		start := fset.Position(stmt.Pos()).Offset
-		end := start + 3
-		if s.Post != nil {
-			end = fset.Position(s.Post.End()).Offset
-		} else if s.Cond != nil {
-			end = fset.Position(s.Cond.End()).Offset
-		} else if s.Init != nil {
-			end = fset.Position(s.Init.End()).Offset
-		}
+		end := fset.Position(s.Body.Pos() - 1).Offset
+		//if s.Post != nil {
+		//	end = fset.Position(s.Post.End()).Offset
+		//} else if s.Cond != nil {
+		//	end = fset.Position(s.Cond.End()).Offset
+		//} else if s.Init != nil {
+		//	end = fset.Position(s.Init.End()).Offset
+		//}
 		return strings.TrimSpace(string(src[start:end]))
 	case *ast.RangeStmt:
 		start := fset.Position(s.Pos()).Offset
